@@ -1,1 +1,6 @@
-blah(a, b) {a+10/b}
+let foo = 3;
+let bar = 13 + foo;
+
+let foo = 10;
+
+200 / (foo * bar - 1)

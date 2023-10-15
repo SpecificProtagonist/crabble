@@ -52,6 +52,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ast"
+version = "0.1.0"
+dependencies = [
+ "chumsky",
+ "indexmap",
+ "rustc-hash",
+]
+
+[[package]]
 name = "autocfg"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -194,12 +203,15 @@ name = "crabble"
 version = "0.1.0"
 dependencies = [
  "ariadne",
+ "ast",
  "bevy_reflect",
  "chumsky",
  "cranelift",
  "cranelift-jit",
  "cranelift-module",
  "cranelift-native",
+ "indexmap",
+ "rustc-hash",
 ]
 
 [[package]]

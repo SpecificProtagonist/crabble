@@ -1,8 +1,8 @@
-use crate::ast;
-
 use cranelift::prelude::{types::F64, *};
 use cranelift_jit::{JITBuilder, JITModule};
 use cranelift_module::{DataDescription, Linkage, Module};
+
+use crate::hir;
 
 pub struct Jit {
     builder_context: FunctionBuilderContext,
@@ -35,7 +35,7 @@ impl Default for Jit {
 }
 
 impl Jit {
-    pub fn compile(&mut self, fun: &ast::Function) -> *const u8 {
+    pub fn compile(&mut self, fun: &hir::Function) -> *const u8 {
         for _ in &fun.args {
             self.ctx.func.signature.params.push(AbiParam::new(F64));
         }
@@ -59,18 +59,20 @@ impl Jit {
 
         let mut trans = FunctionTranslator {
             builder,
-            vars,
             module: &mut self.module,
         };
 
         let tmp_no_return = trans.builder.ins().f64const(0);
         let mut return_value = tmp_no_return;
-        for expr in &fun.body.exprs {
+        for expr in &fun.body {
             return_value = match expr {
-                ast::BlockExpr::Blank => tmp_no_return,
-                ast::BlockExpr::Expr(e) => trans.translate_expr(e),
-                ast::BlockExpr::Assign { decl, ident, value } => {
-                    trans.translate_assign(*decl, ident, value);
+                hir::BlockExpr::Expr(e) => trans.translate_expr(e),
+                hir::BlockExpr::Decl(var) => {
+                    trans.translate_decl(*var);
+                    tmp_no_return
+                }
+                hir::BlockExpr::Assign(var, value) => {
+                    trans.translate_assign(*var, value);
                     tmp_no_return
                 }
             }
@@ -81,7 +83,7 @@ impl Jit {
 
         let id = self
             .module
-            .declare_function(&fun.name, Linkage::Export, &self.ctx.func.signature)
+            .declare_function("main_body", Linkage::Export, &self.ctx.func.signature)
             .unwrap();
 
         self.module.define_function(id, &mut self.ctx).unwrap();
@@ -93,66 +95,40 @@ impl Jit {
 
 struct FunctionTranslator<'a> {
     builder: FunctionBuilder<'a>,
-    vars: Vec<(String, Variable)>,
     module: &'a mut JITModule,
 }
 
 impl<'a> FunctionTranslator<'a> {
-    fn var(&self, ident: &String) -> Variable {
-        self.vars
-            .iter()
-            .rev()
-            .find(|(name, _)| name == ident)
-            .unwrap_or_else(|| panic!("Variable {ident} not found"))
-            .1
+    fn translate_decl(&mut self, var: u32) {
+        self.builder.declare_var(Variable::from_u32(var), F64);
     }
 
-    fn translate_assign(&mut self, decl: bool, ident: &String, value: &ast::Expr) {
+    fn translate_assign(&mut self, var: u32, value: &hir::Expr) {
         let value = self.translate_expr(value);
-        if decl {
-            let var = Variable::from_u32(self.vars.len() as u32);
-            self.builder.declare_var(var, F64);
-            self.vars.push((ident.clone(), var))
-        } else {
-            let var = self.var(ident);
-            self.builder.def_var(var, value);
-        }
+        self.builder.def_var(Variable::from_u32(var), value);
     }
 
-    fn translate_expr(&mut self, expr: &ast::Expr) -> Value {
-        match expr {
-            &ast::Expr::Num(val) => self.builder.ins().f64const(val),
-            ast::Expr::Var(ident) => {
-                let var = self.var(ident);
-                self.builder.use_var(var)
-            }
-            ast::Expr::Neg(e) => {
-                let value = self.translate_expr(e);
-                self.builder.ins().fneg(value)
-            }
-            ast::Expr::Add(e1, e2) => {
+    fn translate_expr(&mut self, expr: &hir::Expr) -> Value {
+        match &expr.variant {
+            &hir::ExprV::Literal(val) => self.builder.ins().f64const(val),
+            &hir::ExprV::Var(var) => self.builder.use_var(Variable::from_u32(var)),
+            hir::ExprV::Op1(op, e) => match op {
+                ast::Op1::Neg => {
+                    let value = self.translate_expr(e);
+                    self.builder.ins().fneg(value)
+                }
+            },
+            hir::ExprV::Op2(op, e1, e2) => {
                 let v1 = self.translate_expr(e1);
                 let v2 = self.translate_expr(e2);
-                self.builder.ins().fadd(v1, v2)
+                match op {
+                    ast::Op2::Add => self.builder.ins().fadd(v1, v2),
+                    ast::Op2::Sub => self.builder.ins().fsub(v1, v2),
+                    ast::Op2::Mul => self.builder.ins().fmul(v1, v2),
+                    ast::Op2::Div => self.builder.ins().fdiv(v1, v2),
+                }
             }
-            ast::Expr::Sub(e1, e2) => {
-                let v1 = self.translate_expr(e1);
-                let v2 = self.translate_expr(e2);
-                self.builder.ins().fsub(v1, v2)
-            }
-            ast::Expr::Mul(e1, e2) => {
-                let v1 = self.translate_expr(e1);
-                let v2 = self.translate_expr(e2);
-                self.builder.ins().fmul(v1, v2)
-            }
-            ast::Expr::Div(e1, e2) => {
-                let v1 = self.translate_expr(e1);
-                let v2 = self.translate_expr(e2);
-                self.builder.ins().fdiv(v1, v2)
-            }
-            ast::Expr::Call(_, _) => todo!(),
-            ast::Expr::Block(_) => todo!(),
-            ast::Expr::Error => panic!("Parse error"),
+            hir::ExprV::Call(_, _) => todo!(),
         }
     }
 }

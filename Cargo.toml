@@ -3,11 +3,17 @@ name = "crabble"
 version = "0.1.0"
 edition = "2021"
 
+[workspace]
+members = ["ast"]
+
 [dependencies]
-ariadne = "0.3.0"
-bevy_reflect = "0.11.3"
+ast = {path="ast"}
+ariadne = "0.3"
+bevy_reflect = "0.11"
 chumsky = { version = "1.0.0-alpha.6", features = ["label"] }
-cranelift = "0.100.0"
+cranelift = "0.100"
 cranelift-jit = "0.100"
-cranelift-module = "0.100.0"
-cranelift-native = "0.100.0"
+cranelift-module = "0.100"
+cranelift-native = "0.100"
+indexmap = "2"
+rustc-hash = "1.1"

@@ -1,0 +1,10 @@
+[package]
+name = "ast"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# TODO: use workspace dependencies
+chumsky = { version = "1.0.0-alpha.6", features = ["label"] }
+indexmap = "2"
+rustc-hash = "1.1"
