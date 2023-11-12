@@ -62,21 +62,7 @@ impl Jit {
             module: &mut self.module,
         };
 
-        let tmp_no_return = trans.builder.ins().f64const(0);
-        let mut return_value = tmp_no_return;
-        for expr in &fun.body {
-            return_value = match expr {
-                hir::BlockExpr::Expr(e) => trans.translate_expr(e),
-                hir::BlockExpr::Decl(var) => {
-                    trans.translate_decl(*var);
-                    tmp_no_return
-                }
-                hir::BlockExpr::Assign(var, value) => {
-                    trans.translate_assign(*var, value);
-                    tmp_no_return
-                }
-            }
-        }
+        let return_value = trans.translate_expr(&fun.value);
 
         trans.builder.ins().return_(&[return_value]);
         trans.builder.finalize();
@@ -99,6 +85,25 @@ struct FunctionTranslator<'a> {
 }
 
 impl<'a> FunctionTranslator<'a> {
+    fn translate_block(&mut self, block: &[hir::BlockExpr]) -> Value {
+        let tmp_no_return = self.builder.ins().f64const(0);
+        let mut return_value = tmp_no_return;
+        for expr in block {
+            return_value = match expr {
+                hir::BlockExpr::Expr(e) => self.translate_expr(e),
+                hir::BlockExpr::Decl(var) => {
+                    self.translate_decl(*var);
+                    tmp_no_return
+                }
+                hir::BlockExpr::Assign(var, value) => {
+                    self.translate_assign(*var, value);
+                    tmp_no_return
+                }
+            }
+        }
+        return_value
+    }
+
     fn translate_decl(&mut self, var: u32) {
         self.builder.declare_var(Variable::from_u32(var), F64);
     }
@@ -128,6 +133,7 @@ impl<'a> FunctionTranslator<'a> {
                     ast::Op2::Div => self.builder.ins().fdiv(v1, v2),
                 }
             }
+            hir::ExprV::Block(items) => self.translate_block(items),
             hir::ExprV::Call(_, _) => todo!(),
         }
     }

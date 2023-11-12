@@ -18,7 +18,7 @@ enum TypV {
 pub struct Function {
     pub name: Option<Span>,
     pub args: Vec<Span>,
-    pub body: Vec<BlockExpr>,
+    pub value: Expr,
 }
 
 pub enum BlockExpr {
@@ -39,10 +39,11 @@ pub enum ExprV {
     Op1(Op1, Box<Expr>),
     Op2(Op2, Box<Expr>, Box<Expr>),
 
+    Block(Vec<BlockExpr>),
     Call(Box<Expr>, Vec<Expr>),
 }
 
-pub fn build(src: &str, ast: &[ast::Item]) -> Result<Hir> {
+pub fn build(src: &str, ast: &ast::Expr) -> Result<Hir> {
     let mut builder = Builder {
         src,
         hir: default(),
@@ -50,12 +51,12 @@ pub fn build(src: &str, ast: &[ast::Item]) -> Result<Hir> {
         scope_vars: default(),
     };
 
-    let body = builder.block(ast)?;
+    let body = builder.expr(ast)?;
     let mut hir = builder.hir;
     hir.functions.push(Function {
         name: default(),
         args: default(),
-        body,
+        value: body,
     });
 
     Ok(hir)
@@ -65,7 +66,7 @@ struct Builder<'a> {
     src: &'a str,
     hir: Hir,
     vars: Vec<Span>,
-    scope_vars: Map<&'a str, u32>,
+    scope_vars: Vec<Map<&'a str, u32>>,
 }
 
 fn s(src: &str, span: Span) -> &str {
@@ -73,7 +74,19 @@ fn s(src: &str, span: Span) -> &str {
 }
 
 impl<'a> Builder<'a> {
+    fn lookup(&self, name: &str) -> Option<u32> {
+        self.scope_vars
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).copied())
+    }
+
+    // fn fun(&mut, fun: &ast::Function) {
+    //
+    // }
+
     fn block(&mut self, items: &[ast::Item]) -> Result<Vec<BlockExpr>> {
+        self.scope_vars.push(default());
         let mut hir_items = Vec::new();
         for item in items {
             match item {
@@ -83,10 +96,10 @@ impl<'a> Builder<'a> {
                     let id = if *decl {
                         let id = self.vars.len() as u32;
                         self.vars.push(*ident);
-                        self.scope_vars.insert(str, id);
+                        self.scope_vars.last_mut().unwrap().insert(str, id);
                         hir_items.push(BlockExpr::Decl(id));
                         id
-                    } else if let Some(&id) = self.scope_vars.get(str) {
+                    } else if let Some(id) = self.lookup(str) {
                         id
                     } else {
                         return Err(Err::NotFound { ident: *ident });
@@ -98,6 +111,7 @@ impl<'a> Builder<'a> {
                 }
             }
         }
+        self.scope_vars.pop();
         Ok(hir_items)
     }
 
@@ -108,15 +122,14 @@ impl<'a> Builder<'a> {
             variant: match expr {
                 ast::ExprV::Literal(lit) => ExprV::Literal(*lit),
                 ast::ExprV::Var => ExprV::Var(
-                    *self
-                        .scope_vars
-                        .get(s(self.src, *span))
+                    self.lookup(s(self.src, *span))
                         .ok_or(Err::NotFound { ident: *span })?,
                 ),
                 ast::ExprV::Op1(op, val) => ExprV::Op1(*op, self.expr(val)?.into()),
                 ast::ExprV::Op2(op, val_1, val_2) => {
                     ExprV::Op2(*op, self.expr(val_1)?.into(), self.expr(val_2)?.into())
                 }
+                ast::ExprV::Block(items) => ExprV::Block(self.block(items)?),
                 ast::ExprV::Call(_fun, _args) => ExprV::Call(todo!(), todo!()),
                 ast::ExprV::Error => todo!(),
             },

@@ -16,12 +16,25 @@ fn default<T: Default>() -> T {
 fn main() {
     let src = std::fs::read_to_string(std::env::args().nth(1).unwrap()).unwrap();
 
+    let span_to_line_pos = |mut pos| {
+        let mut line_num = 1;
+        for line in src.lines() {
+            if line.len() < pos {
+                pos -= line.len() + 1;
+                line_num += 1;
+            } else {
+                break;
+            }
+        }
+        (line_num, pos + 1)
+    };
     let ast = match ast::parse(&src).into_result() {
         Ok(ast) => ast,
         Err(parse_errs) => {
-            parse_errs
-                .into_iter()
-                .for_each(|e| println!("Parse error: {}", e));
+            for e in parse_errs {
+                let (line, pos) = span_to_line_pos(e.span().start);
+                println!("{line}:{pos} Parse error: {}", e);
+            }
             std::process::exit(1)
         }
     };
