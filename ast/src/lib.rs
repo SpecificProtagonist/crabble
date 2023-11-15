@@ -20,8 +20,13 @@ pub enum Op2 {
 #[derive(Debug, Clone)]
 pub struct Function {
     pub name: Span,
-    pub args: Vec<Span>,
+    pub args: Vec<(Decl, Span)>,
     pub body: Expr,
+}
+
+#[derive(Debug, Clone)]
+pub struct Decl {
+    pub mutable: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -29,7 +34,7 @@ pub enum Item {
     Blank,
     Expr(Expr),
     Assign {
-        decl: bool,
+        decl: Option<Decl>,
         ident: Span,
         value: Expr,
     },
@@ -124,7 +129,7 @@ fn parser<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> {
                 .labelled("expression")
         });
 
-        let assign = just("let")
+        let assign = (just("let").then(just("mut").padded().or_not()))
             .or_not()
             .then(ident)
             .then_ignore(just('='))
@@ -132,14 +137,26 @@ fn parser<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> {
             .then_ignore(just(';'))
             .padded()
             .map(|((decl, ident), value)| Item::Assign {
-                decl: decl.is_some(),
+                decl: if let Some((_, mutable)) = decl {
+                    Some(Decl {
+                        mutable: mutable.is_some(),
+                    })
+                } else {
+                    None
+                },
                 ident,
                 value,
             });
 
         let function = ident
             .then(
-                ident
+                just("mut")
+                    .or_not()
+                    .padded()
+                    .map(|mutable| Decl {
+                        mutable: mutable.is_some(),
+                    })
+                    .then(ident)
                     .separated_by(just(','))
                     .collect()
                     .delimited_by(just('('), just(')')),

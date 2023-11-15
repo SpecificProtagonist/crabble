@@ -4,7 +4,6 @@ mod jit;
 
 pub use ast::Span;
 pub use err::{Err, Result};
-use jit::Jit;
 
 type Set<K> = indexmap::IndexSet<K, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
 type Map<K, V> = indexmap::IndexMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
@@ -48,8 +47,9 @@ fn main() {
         }
     };
 
-    let main = hir.functions.last().unwrap();
-    let main_ptr = Jit::default().compile(main);
+    // println!("{hir:?}");
+
+    let main_ptr = jit::compile(&hir);
     let main_ptr = unsafe { std::mem::transmute::<_, fn() -> f64>(main_ptr) };
     println!("Return: {}", main_ptr());
 }

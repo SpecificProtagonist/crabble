@@ -1,8 +1,4 @@
-let foo = 3;
-let bar = 13 + foo;
+test(a, b) {a+b}
+foo(a, b) {a+b}
 
-{
-	let foo = 10;
-}
-
-200 / (foo * bar - 1)
+test(1, 2)

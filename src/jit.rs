@@ -1,18 +1,50 @@
-use cranelift::prelude::{types::F64, *};
+use cranelift::prelude::{
+    types::{F64, I64},
+    *,
+};
 use cranelift_jit::{JITBuilder, JITModule};
-use cranelift_module::{DataDescription, Linkage, Module};
+use cranelift_module::{DataDescription, FuncId, Linkage, Module};
 
-use crate::hir;
+use crate::{
+    default,
+    hir::{self, Expr, Hir},
+};
 
-pub struct Jit {
+const ADDR: Type = I64;
+
+struct Jit<'a> {
     builder_context: FunctionBuilderContext,
     ctx: codegen::Context,
     data_description: DataDescription,
     module: JITModule,
+    hir: &'a Hir,
+    functions: Vec<FuncId>,
 }
 
-impl Default for Jit {
-    fn default() -> Self {
+pub fn compile(hir: &Hir) -> *const u8 {
+    let mut jit = Jit::new(hir);
+
+    // Declare functions
+    for fun in hir.functions.iter() {
+        let sig = jit.make_sig(fun);
+        let id = jit
+            .module
+            .declare_function(&format!("@{}", fun.id), Linkage::Local, &sig)
+            .unwrap();
+        jit.functions.push(id);
+    }
+
+    // Define functions
+    for fun in hir.functions.iter() {
+        jit.translate_fn(fun)
+    }
+
+    let entrypoint = jit.functions.last().unwrap();
+    jit.module.get_finalized_function(*entrypoint)
+}
+
+impl<'a> Jit<'a> {
+    fn new(hir: &'a Hir) -> Self {
         let mut flag_builder = settings::builder();
         flag_builder.set("use_colocated_libcalls", "false").unwrap();
         flag_builder.set("is_pic", "false").unwrap();
@@ -30,16 +62,22 @@ impl Default for Jit {
             ctx: module.make_context(),
             data_description: DataDescription::new(),
             module,
+            hir,
+            functions: default(),
         }
     }
-}
 
-impl Jit {
-    pub fn compile(&mut self, fun: &hir::Function) -> *const u8 {
+    fn make_sig(&mut self, fun: &hir::Function) -> Signature {
+        let mut sig = self.module.make_signature();
         for _ in &fun.args {
-            self.ctx.func.signature.params.push(AbiParam::new(F64));
+            sig.params.push(AbiParam::new(F64));
         }
-        self.ctx.func.signature.returns.push(AbiParam::new(F64));
+        sig.returns.push(AbiParam::new(F64));
+        sig
+    }
+
+    fn translate_fn(&mut self, fun: &hir::Function) {
+        self.ctx.func.signature = self.make_sig(fun);
 
         let mut builder = FunctionBuilder::new(&mut self.ctx.func, &mut self.builder_context);
 
@@ -51,7 +89,7 @@ impl Jit {
         let mut vars = Vec::new();
         for (i, arg) in fun.args.iter().enumerate() {
             let val = builder.block_params(entry_block)[i];
-            let var = Variable::from_u32(i as u32);
+            let var = Variable::from_u32(*arg);
             builder.declare_var(var, F64);
             builder.def_var(var, val);
             vars.push((arg.clone(), var));
@@ -60,6 +98,8 @@ impl Jit {
         let mut trans = FunctionTranslator {
             builder,
             module: &mut self.module,
+            hir: self.hir,
+            functions: &mut self.functions,
         };
 
         let return_value = trans.translate_expr(&fun.value);
@@ -67,21 +107,19 @@ impl Jit {
         trans.builder.ins().return_(&[return_value]);
         trans.builder.finalize();
 
-        let id = self
-            .module
-            .declare_function("main_body", Linkage::Export, &self.ctx.func.signature)
-            .unwrap();
+        let id = self.functions[fun.id as usize];
 
         self.module.define_function(id, &mut self.ctx).unwrap();
         self.module.clear_context(&mut self.ctx);
         self.module.finalize_definitions().unwrap();
-        self.module.get_finalized_function(id)
     }
 }
 
 struct FunctionTranslator<'a> {
+    hir: &'a Hir,
     builder: FunctionBuilder<'a>,
     module: &'a mut JITModule,
+    functions: &'a mut Vec<FuncId>,
 }
 
 impl<'a> FunctionTranslator<'a> {
@@ -115,7 +153,15 @@ impl<'a> FunctionTranslator<'a> {
 
     fn translate_expr(&mut self, expr: &hir::Expr) -> Value {
         match &expr.variant {
-            &hir::ExprV::Literal(val) => self.builder.ins().f64const(val),
+            hir::ExprV::Const(val) => match val {
+                hir::Const::Empty => todo!("proper types"),
+                hir::Const::F64(num) => self.builder.ins().f64const(*num),
+                hir::Const::Fun(fun_id) => {
+                    let id = self.functions[*fun_id as usize];
+                    let func_ref = self.module.declare_func_in_func(id, self.builder.func);
+                    self.builder.ins().func_addr(ADDR, func_ref)
+                }
+            },
             &hir::ExprV::Var(var) => self.builder.use_var(Variable::from_u32(var)),
             hir::ExprV::Op1(op, e) => match op {
                 ast::Op1::Neg => {
@@ -134,7 +180,20 @@ impl<'a> FunctionTranslator<'a> {
                 }
             }
             hir::ExprV::Block(items) => self.translate_block(items),
-            hir::ExprV::Call(_, _) => todo!(),
+            hir::ExprV::Call(callee, args) => {
+                if let hir::ExprV::Const(hir::Const::Fun(fun_id)) = callee.variant {
+                    let id = self.functions[fun_id as usize];
+                    let local_callee = self.module.declare_func_in_func(id, self.builder.func);
+                    let mut arg_values = Vec::new();
+                    for arg in args {
+                        arg_values.push(self.translate_expr(arg))
+                    }
+                    let call = self.builder.ins().call(local_callee, &arg_values);
+                    self.builder.inst_results(call)[0]
+                } else {
+                    todo!("call_indirect: use import_signature; needs type information")
+                }
+            }
         }
     }
 }

@@ -6,8 +6,9 @@ pub type Result<T> = std::result::Result<T, Err>;
 
 #[derive(Debug)]
 pub enum Err {
-    Redefinition { ident: Span, previous: Span },
     NotFound { ident: Span },
+    Immutable { ident: Span, decl: Span },
+    ConstRedefinition { ident: Span, existing: Span },
 }
 
 // TODO: Ariadne
