@@ -12,9 +12,12 @@ fn default<T: Default>() -> T {
     T::default()
 }
 
-fn main() {
+fn main() -> miette::Result<()> {
     let src = std::fs::read_to_string(std::env::args().nth(1).unwrap()).unwrap();
+    run(&src).map_err(|error| error.with_source_code(src))
+}
 
+fn run(src: &str) -> miette::Result<()> {
     let span_to_line_pos = |mut pos| {
         let mut line_num = 1;
         for line in src.lines() {
@@ -39,17 +42,13 @@ fn main() {
     };
     // println!("{ast:?}");
 
-    let hir = match hir::build(&src, &ast) {
-        Ok(hir) => hir,
-        Err(err) => {
-            eprintln!("{err:?}");
-            std::process::exit(2)
-        }
-    };
+    let hir = hir::build(src, &ast)?;
 
     // println!("{hir:?}");
 
     let main_ptr = jit::compile(&hir);
     let main_ptr = unsafe { std::mem::transmute::<_, fn() -> f64>(main_ptr) };
     println!("Return: {}", main_ptr());
+
+    Ok(())
 }

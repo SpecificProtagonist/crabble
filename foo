@@ -1,4 +1,4 @@
 test(a, b) {a+b}
-foo(a, b) {a+b}
 
-test(1, 2)
+let a = 1;
+a = 2;

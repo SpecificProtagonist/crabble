@@ -8,7 +8,6 @@ members = ["ast"]
 
 [dependencies]
 ast = {path="ast"}
-ariadne = "0.3"
 bevy_reflect = "0.11"
 chumsky = { version = "1.0.0-alpha.6", features = ["label"] }
 cranelift = "0.100"
@@ -17,3 +16,5 @@ cranelift-module = "0.100"
 cranelift-native = "0.100"
 indexmap = "2"
 rustc-hash = "1.1"
+miette = { version = "5.10.0", features = ["fancy"] }
+thiserror = "1.0.50"

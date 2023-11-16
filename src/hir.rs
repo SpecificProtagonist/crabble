@@ -1,3 +1,4 @@
+use crate::err::miette;
 use ast::{Op1, Op2};
 
 use crate::*;
@@ -123,8 +124,8 @@ impl<'a> Builder<'a> {
             let existing = &self.decls[existing as usize];
             if matches!(existing.kind, DeclKind::Const(_)) {
                 return Err(Err::ConstRedefinition {
-                    ident,
-                    existing: existing.span,
+                    ident: miette(ident),
+                    existing: miette(existing.span),
                 });
             }
         }
@@ -208,13 +209,15 @@ impl<'a> Builder<'a> {
                         let decl = &self.decls[id as usize];
                         if !matches!(decl.kind, DeclKind::Mutable) {
                             return Err(Err::Immutable {
-                                ident: *ident,
-                                decl: decl.span,
+                                ident: miette(*ident),
+                                decl: miette(decl.span),
                             });
                         }
                         id
                     } else {
-                        return Err(Err::NotFound { ident: *ident });
+                        return Err(Err::NotFound {
+                            ident: miette(*ident),
+                        });
                     };
                     hir_items.push(BlockExpr::Assign(id, self.expr(value)?));
                 }
@@ -235,9 +238,9 @@ impl<'a> Builder<'a> {
             variant: match expr {
                 ast::ExprV::Literal(lit) => ExprV::Const(Const::F64(*lit)),
                 ast::ExprV::Var => {
-                    let id = self
-                        .lookup(s(self.src, *span))
-                        .ok_or(Err::NotFound { ident: *span })?;
+                    let id = self.lookup(s(self.src, *span)).ok_or(Err::NotFound {
+                        ident: miette(*span),
+                    })?;
                     let decl = &self.decls[id as usize];
                     match &decl.kind {
                         DeclKind::Mutable | DeclKind::Readonly => ExprV::Var(id),
