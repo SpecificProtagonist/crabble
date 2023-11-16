@@ -1,9 +1,12 @@
 mod err;
 mod hir;
 mod jit;
+mod typ;
+
+use std::sync::Arc;
 
 pub use ast::Span;
-pub use err::{Err, Result};
+pub use err::{Diag, Result};
 
 type Set<K> = indexmap::IndexSet<K, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
 type Map<K, V> = indexmap::IndexMap<K, V, std::hash::BuildHasherDefault<rustc_hash::FxHasher>>;
@@ -12,43 +15,32 @@ fn default<T: Default>() -> T {
     T::default()
 }
 
-fn main() -> miette::Result<()> {
-    let src = std::fs::read_to_string(std::env::args().nth(1).unwrap()).unwrap();
-    run(&src).map_err(|error| error.with_source_code(src))
+fn main() {
+    let src = Arc::new(std::fs::read_to_string(std::env::args().nth(1).unwrap()).unwrap());
+    let mut print_diag = |diag| {
+        eprintln!(
+            "{:?}",
+            miette::Error::new(diag).with_source_code(src.clone())
+        )
+    };
+    let result = run(&src, &mut print_diag);
+    if let Some(result) = result {
+        println!("Return: {result}");
+    }
 }
 
-fn run(src: &str) -> miette::Result<()> {
-    let span_to_line_pos = |mut pos| {
-        let mut line_num = 1;
-        for line in src.lines() {
-            if line.len() < pos {
-                pos -= line.len() + 1;
-                line_num += 1;
-            } else {
-                break;
-            }
-        }
-        (line_num, pos + 1)
-    };
-    let ast = match ast::parse(&src).into_result() {
-        Ok(ast) => ast,
-        Err(parse_errs) => {
-            for e in parse_errs {
-                let (line, pos) = span_to_line_pos(e.span().start);
-                println!("{line}:{pos} Parse error: {}", e);
-            }
-            std::process::exit(1)
-        }
-    };
+fn run(src: &str, diag: &mut dyn FnMut(Diag)) -> Option<f64> {
+    let (ast, parse_errors) = ast::parse(&src).into_output_errors();
+    err::ast_errors_to_report(parse_errors, diag);
+    let ast = ast?;
+
     // println!("{ast:?}");
 
-    let hir = hir::build(src, &ast)?;
+    let hir = hir::build(src, &ast, diag);
 
     // println!("{hir:?}");
 
-    let main_ptr = jit::compile(&hir);
-    let main_ptr = unsafe { std::mem::transmute::<_, fn() -> f64>(main_ptr) };
-    println!("Return: {}", main_ptr());
-
-    Ok(())
+    let entrypoint = jit::compile(&hir);
+    let entrypoint = unsafe { std::mem::transmute::<_, fn() -> f64>(entrypoint) };
+    Some(entrypoint())
 }

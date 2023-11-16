@@ -1,4 +1,7 @@
-use crate::err::miette;
+use crate::{
+    err::miette,
+    typ::{Typ, TypV},
+};
 use ast::{Op1, Op2};
 
 use crate::*;
@@ -6,22 +9,12 @@ use crate::*;
 #[derive(Default, Debug)]
 pub struct Hir {
     pub types: Set<TypV>,
+    /// The entrypoint is the first function
     pub functions: Vec<Function>,
 }
 
-// TODO: niche
-#[derive(Debug)]
-pub struct Typ(pub u32);
-
 type FunId = u32;
 type DeclId = u32;
-
-#[derive(Debug)]
-pub enum TypV {
-    Empty,
-    F64,
-    Fun { args: Vec<Typ>, ret: Typ },
-}
 
 #[derive(Debug, Clone)]
 pub enum Const {
@@ -66,7 +59,27 @@ pub struct Expr {
     pub typ: Option<Typ>,
 }
 
-#[derive(Debug)]
+impl Expr {
+    fn err(span: Span) -> Self {
+        Self {
+            variant: ExprV::Error,
+            span,
+            typ: None,
+        }
+    }
+}
+
+impl Default for Expr {
+    fn default() -> Self {
+        Self {
+            variant: ExprV::Error,
+            span: Span::splat(0),
+            typ: None,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
 pub enum ExprV {
     Const(Const),
     Var(u32),
@@ -76,34 +89,45 @@ pub enum ExprV {
 
     Block(Vec<BlockExpr>),
     Call(Box<Expr>, Vec<Expr>),
+
+    #[default]
+    Error,
 }
 
 struct Builder<'a> {
     src: &'a str,
+    diag: &'a mut dyn FnMut(Diag),
     hir: Hir,
     decls: Vec<Decl>,
     scope_decls: Vec<Map<&'a str, DeclId>>,
 }
 
-pub fn build(src: &str, ast: &ast::Expr) -> Result<Hir> {
+pub fn build(src: &str, ast: &ast::Expr, diags: &mut dyn FnMut(Diag)) -> Hir {
+    let mut hir = Hir::default();
+    hir.functions.push(Function {
+        name: None,
+        id: 0,
+        args: default(),
+        value: default(),
+    });
     let mut builder = Builder {
         src,
-        hir: default(),
+        diag: diags,
+        hir,
         decls: default(),
         scope_decls: default(),
     };
 
-    let body = builder.expr(ast)?;
+    let body = builder.expr(ast);
     let mut hir = builder.hir;
-    let entrypoint = hir.functions.len() as u32;
-    hir.functions.push(Function {
+    hir.functions[0] = Function {
         name: default(),
-        id: entrypoint,
+        id: 0,
         args: default(),
         value: body,
-    });
+    };
 
-    Ok(hir)
+    hir
 }
 
 fn s(src: &str, span: Span) -> &str {
@@ -118,22 +142,22 @@ impl<'a> Builder<'a> {
             .find_map(|scope| scope.get(name).copied())
     }
 
-    fn check_const_redefinition(&self, ident: Span) -> Result<()> {
+    fn check_const_redefinition(&mut self, ident: Span) {
         let str = s(self.src, ident);
         if let Some(existing) = self.lookup(str) {
             let existing = &self.decls[existing as usize];
             if matches!(existing.kind, DeclKind::Const(_)) {
-                return Err(Err::ConstRedefinition {
+                (self.diag)(Diag::ConstRedefinition {
                     ident: miette(ident),
                     existing: miette(existing.span),
                 });
+                return;
             }
         }
-        Ok(())
     }
 
-    fn function(&mut self, fun: &ast::Function) -> Result<()> {
-        self.check_const_redefinition(fun.name)?;
+    fn function(&mut self, fun: &ast::Function) {
+        self.check_const_redefinition(fun.name);
 
         let mut args = Vec::new();
         for (decl, ident) in &fun.args {
@@ -153,7 +177,7 @@ impl<'a> Builder<'a> {
             self.scope_decls.last_mut().unwrap().insert(str, id);
         }
 
-        let body = self.expr(&fun.body)?;
+        let body = self.expr(&fun.body);
         let fun_id = self.hir.functions.len() as u32;
         self.hir.functions.push(Function {
             name: Some(fun.name),
@@ -171,16 +195,15 @@ impl<'a> Builder<'a> {
             .last_mut()
             .unwrap()
             .insert(s(&self.src, fun.name), decl_id);
-        Ok(())
     }
 
-    fn block(&mut self, items: &[ast::Item]) -> Result<Vec<BlockExpr>> {
+    fn block(&mut self, items: &[ast::Item]) -> Vec<BlockExpr> {
         self.scope_decls.push(default());
         let mut hir_items = Vec::new();
         // Order-independant
         for item in items {
             match item {
-                ast::Item::Fun(fun) => self.function(fun)?,
+                ast::Item::Fun(fun) => self.function(fun),
                 _ => {}
             }
         }
@@ -191,7 +214,7 @@ impl<'a> Builder<'a> {
                 ast::Item::Assign { decl, ident, value } => {
                     let str = s(self.src, *ident);
                     let id = if let Some(decl) = decl {
-                        self.check_const_redefinition(*ident)?;
+                        self.check_const_redefinition(*ident);
                         let id = self.decls.len() as u32;
                         self.decls.push(Decl {
                             span: *ident,
@@ -208,59 +231,65 @@ impl<'a> Builder<'a> {
                     } else if let Some(id) = self.lookup(str) {
                         let decl = &self.decls[id as usize];
                         if !matches!(decl.kind, DeclKind::Mutable) {
-                            return Err(Err::Immutable {
+                            (self.diag)(Diag::Immutable {
                                 ident: miette(*ident),
                                 decl: miette(decl.span),
                             });
                         }
                         id
                     } else {
-                        return Err(Err::NotFound {
+                        (self.diag)(Diag::NotFound {
                             ident: miette(*ident),
                         });
+                        hir_items.push(BlockExpr::Expr(default()));
+                        continue;
                     };
-                    hir_items.push(BlockExpr::Assign(id, self.expr(value)?));
+                    hir_items.push(BlockExpr::Assign(id, self.expr(value)));
                 }
                 ast::Item::Expr(e) => {
-                    hir_items.push(BlockExpr::Expr(self.expr(e)?));
+                    hir_items.push(BlockExpr::Expr(self.expr(e)));
                 }
             }
         }
         self.scope_decls.pop();
-        Ok(hir_items)
+        hir_items
     }
 
-    fn expr(&mut self, expr: &ast::Expr) -> Result<Expr> {
+    fn expr(&mut self, expr: &ast::Expr) -> Expr {
         let ast::Expr(expr, span) = expr;
-        Ok(Expr {
+        Expr {
             span: *span,
             typ: None,
             variant: match expr {
                 ast::ExprV::Literal(lit) => ExprV::Const(Const::F64(*lit)),
                 ast::ExprV::Var => {
-                    let id = self.lookup(s(self.src, *span)).ok_or(Err::NotFound {
-                        ident: miette(*span),
-                    })?;
-                    let decl = &self.decls[id as usize];
-                    match &decl.kind {
-                        DeclKind::Mutable | DeclKind::Readonly => ExprV::Var(id),
-                        DeclKind::Const(value) => ExprV::Const((*value).clone()),
+                    if let Some(id) = self.lookup(s(self.src, *span)) {
+                        let decl = &self.decls[id as usize];
+                        match &decl.kind {
+                            DeclKind::Mutable | DeclKind::Readonly => ExprV::Var(id),
+                            DeclKind::Const(value) => ExprV::Const((*value).clone()),
+                        }
+                    } else {
+                        (self.diag)(Diag::NotFound {
+                            ident: miette(*span),
+                        });
+                        ExprV::Error
                     }
                 }
-                ast::ExprV::Op1(op, val) => ExprV::Op1(*op, self.expr(val)?.into()),
+                ast::ExprV::Op1(op, val) => ExprV::Op1(*op, self.expr(val).into()),
                 ast::ExprV::Op2(op, val_1, val_2) => {
-                    ExprV::Op2(*op, self.expr(val_1)?.into(), self.expr(val_2)?.into())
+                    ExprV::Op2(*op, self.expr(val_1).into(), self.expr(val_2).into())
                 }
-                ast::ExprV::Block(items) => ExprV::Block(self.block(items)?),
+                ast::ExprV::Block(items) => ExprV::Block(self.block(items)),
                 ast::ExprV::Call(fun, args) => {
                     let mut vec = Vec::with_capacity(args.len());
                     for arg in args {
-                        vec.push(self.expr(arg)?);
+                        vec.push(self.expr(arg));
                     }
-                    ExprV::Call(self.expr(fun)?.into(), vec)
+                    ExprV::Call(self.expr(fun).into(), vec)
                 }
-                ast::ExprV::Error => todo!(),
+                ast::ExprV::Error => ExprV::Error,
             },
-        })
+        }
     }
 }

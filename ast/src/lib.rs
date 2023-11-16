@@ -68,6 +68,16 @@ fn parser<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> {
     let ident = text::ident().map_with(|_, e| e.span()).padded();
 
     let block = recursive(|block| {
+        let block = block
+            .delimited_by(just('{'), just('}'))
+            .recover_with(via_parser(
+                just('{')
+                    .then(none_of('}').repeated().then(just('}')))
+                    .map_with(|_, e| Expr(ExprV::Error, e.span())),
+            ))
+            .padded()
+            .boxed();
+
         let expr = recursive(|expr| {
             let number = text::int(10)
                 .map_with(|s: &str, e| Expr(ExprV::Literal(s.parse().unwrap()), e.span()))
@@ -82,7 +92,7 @@ fn parser<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> {
                 .padded()
                 .or(number)
                 .or(var)
-                .or(block.clone().delimited_by(just('{'), just('}')))
+                .or(block.clone())
                 // Todo: try out nested_delimiters instead
                 .recover_with(via_parser(
                     just('(')
@@ -161,14 +171,14 @@ fn parser<'a>() -> impl Parser<'a, &'a str, Expr, Extra<'a>> {
                     .collect()
                     .delimited_by(just('('), just(')')),
             )
-            .then(block.clone().delimited_by(just('{'), just('}')).padded())
+            .then(block.clone())
             .map(|((name, args), body)| Function { name, args, body });
 
         let item = choice((
             expr.clone().map(Item::Expr).then_ignore(just(';')),
             assign,
             function.map(Item::Fun),
-            block.delimited_by(just('{'), just('}')).map(Item::Expr),
+            block.map(Item::Expr),
         ));
 
         item.repeated()

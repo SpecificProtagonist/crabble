@@ -38,9 +38,10 @@ pub fn compile(hir: &Hir) -> *const u8 {
     for fun in hir.functions.iter() {
         jit.translate_fn(fun)
     }
+    jit.module.finalize_definitions().unwrap();
 
-    let entrypoint = jit.functions.last().unwrap();
-    jit.module.get_finalized_function(*entrypoint)
+    let entrypoint = jit.functions[0];
+    jit.module.get_finalized_function(entrypoint)
 }
 
 impl<'a> Jit<'a> {
@@ -111,7 +112,6 @@ impl<'a> Jit<'a> {
 
         self.module.define_function(id, &mut self.ctx).unwrap();
         self.module.clear_context(&mut self.ctx);
-        self.module.finalize_definitions().unwrap();
     }
 }
 
@@ -193,6 +193,14 @@ impl<'a> FunctionTranslator<'a> {
                 } else {
                     todo!("call_indirect: use import_signature; needs type information")
                 }
+            }
+            hir::ExprV::Error => {
+                // Erroneous code path executed, abort
+                // TODO: actually abort
+                self.builder.ins().f64const(0)
+                // TODO: dead code elimination so there aren't any instructions after the trap
+                // (because the block is already full)
+                // self.builder.ins().trap(TrapCode::UnreachableCodeReached)
             }
         }
     }

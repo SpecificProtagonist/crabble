@@ -1,4 +1,8 @@
-test(a, b) {a+b}
-
-let a = 1;
-a = 2;
+add_2(a) {
+	a + 2
+}
+oops_compile_error() {
+	b
+}
+let number = 3;
+10 + add_2(number) * 2
